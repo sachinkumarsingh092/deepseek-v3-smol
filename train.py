@@ -2,6 +2,7 @@
 This is the ONLY file the agent should edit.
 """
 
+import json
 import time
 from dataclasses import dataclass
 
@@ -9,7 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from prepare import prepare, get_batch, evaluate, generate, TIME_BUDGET_SECONDS
+from prepare import prepare, get_batch, evaluate, generate, save_checkpoint, TIME_BUDGET_SECONDS
 
 # ---------------------------------------------------------------------------
 # Config -- agent can tune these
@@ -276,6 +277,9 @@ class DeepSeekV3(nn.Module):
 # Training -- agent can change anything above or below
 # ---------------------------------------------------------------------------
 
+LOG_FILE = "training_log.json"
+
+
 def train():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_data, val_data, vocab_size, stoi, itos = prepare()
@@ -291,6 +295,14 @@ def train():
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.lr, betas=(0.9, 0.95), weight_decay=config.weight_decay,
     )
+
+    training_log = {
+        "config": vars(config),
+        "total_params": total_params,
+        "device": str(device),
+        "dataset": "nampdn-ai/tiny-codes",
+        "steps": [],
+    }
 
     model.train()
     step = 0
@@ -319,12 +331,35 @@ def train():
             elapsed = time.time() - t0
             print(f"step {step:>5d} | {elapsed:6.1f}s | train {main_loss.item():.3f} | val {val_loss:.3f} | val_bpb {val_bpb:.3f} | bal {bal_loss.item():.6f}")
 
+            training_log["steps"].append({
+                "step": step,
+                "elapsed_s": round(elapsed, 2),
+                "train_loss": round(main_loss.item(), 4),
+                "val_loss": round(val_loss, 4),
+                "val_bpb": round(val_bpb, 4),
+                "balance_loss": round(bal_loss.item(), 6),
+            })
+
     val_loss, val_bpb = evaluate(model, val_data, config.batch_size, config.max_seq_len, device)
     elapsed = time.time() - t0
     print(f"\n=== FINAL | {step} steps in {elapsed:.1f}s | val_loss {val_loss:.4f} | val_bpb {val_bpb:.4f} ===")
 
+    training_log["final"] = {
+        "total_steps": step,
+        "elapsed_s": round(elapsed, 2),
+        "val_loss": round(val_loss, 4),
+        "val_bpb": round(val_bpb, 4),
+    }
+
+    with open(LOG_FILE, "w") as f:
+        json.dump(training_log, f, indent=2)
+    print(f"Saved {LOG_FILE}")
+
     print("\n--- Sample ---")
-    print(generate(model, stoi, itos, "ROMEO:", device=device, max_seq_len=config.max_seq_len))
+    print(generate(model, stoi, itos, "def ", device=device, max_seq_len=config.max_seq_len))
+
+    save_checkpoint(model, config, stoi, itos)
+    print("Training complete. Model saved to checkpoint/")
 
 
 if __name__ == "__main__":

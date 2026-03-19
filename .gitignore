@@ -1,5 +1,8 @@
 __pycache__/
 checkpoint/
-*.txt
 train_best.py
 .venv/
+data/
+training_log.json
+training_plots.png
+*.pyc

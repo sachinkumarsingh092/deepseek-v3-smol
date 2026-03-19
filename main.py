@@ -1,5 +1,8 @@
 from dataclasses import dataclass
+import json
 import os
+import time
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -332,21 +335,41 @@ def push_to_hub(repo_id: str, out_dir: str = "checkpoint"):
     print(f"Pushed to https://huggingface.co/{repo_id}")
 
 
+MAX_EXAMPLES = 100_000
+
+
 def load_dataset(config: ModelConfig):
-    import urllib.request, os
-    path = "tiny_shakespeare.txt"
-    if not os.path.exists(path):
-        url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
-        print(f"Downloading {url}...")
-        urllib.request.urlretrieve(url, path)
-    with open(path, "r") as f:
-        text = f.read()
+    data_dir = "data"
+    cache_file = os.path.join(data_dir, "tiny_codes_text.txt")
+
+    if os.path.exists(cache_file):
+        with open(cache_file, "r") as f:
+            text = f.read()
+    else:
+        from datasets import load_dataset as hf_load
+
+        os.makedirs(data_dir, exist_ok=True)
+        print("Downloading nampdn-ai/tiny-codes from HuggingFace...")
+        ds = hf_load("nampdn-ai/tiny-codes", split="train")
+        if len(ds) > MAX_EXAMPLES:
+            ds = ds.select(range(MAX_EXAMPLES))
+
+        texts = []
+        for row in ds:
+            prompt = row.get("prompt", "") or ""
+            response = row.get("response", "") or ""
+            texts.append(f"{prompt}\n{response}\n\n")
+        text = "".join(texts)
+
+        with open(cache_file, "w") as f:
+            f.write(text)
+        print(f"Cached {len(texts)} examples ({len(text):,} chars)")
 
     chars = sorted(set(text))
     stoi = {c: i for i, c in enumerate(chars)}
     itos = {i: c for c, i in stoi.items()}
     actual_vocab = len(chars)
-    print(f"Dataset: {len(text)} chars, {actual_vocab} unique tokens")
+    print(f"Dataset: {len(text):,} chars, {actual_vocab} unique tokens")
 
     data = torch.tensor([stoi[c] for c in text], dtype=torch.long)
     split = int(0.9 * len(data))
@@ -386,6 +409,8 @@ def generate(model: DeepSeekV3, itos: dict, stoi: dict, prompt: str, max_new: in
 
 
 def train():
+    import math
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     config = ModelConfig(max_seq_len=128, vocab_size=256)
 
@@ -405,7 +430,17 @@ def train():
         weight_decay=config.weight_decay,
     )
 
+    training_log = {
+        "config": vars(config),
+        "total_params": total_params,
+        "device": str(device),
+        "dataset": "nampdn-ai/tiny-codes",
+        "steps": [],
+    }
+
     model.train()
+    t0 = time.time()
+
     for step in range(1, config.train_steps + 1):
         x, y = get_batch(train_data, config, device)
         logits, _ = model(x)
@@ -422,12 +457,40 @@ def train():
 
         if step % config.log_interval == 0 or step == 1:
             val_loss = estimate_loss(model, val_data, config, device)
-            print(f"step {step:>4d} | train {main_loss.item():.3f} | val {val_loss:.3f} | bal {bal_loss.item():.6f}")
+            val_bpb = val_loss / math.log(2)
+            elapsed = time.time() - t0
+            print(f"step {step:>4d} | {elapsed:6.1f}s | train {main_loss.item():.3f} | val {val_loss:.3f} | val_bpb {val_bpb:.3f} | bal {bal_loss.item():.6f}")
 
-    print("\n--- Sample generation ---")
-    print(generate(model, itos, stoi, "ROMEO:", device=device))
+            training_log["steps"].append({
+                "step": step,
+                "elapsed_s": round(elapsed, 2),
+                "train_loss": round(main_loss.item(), 4),
+                "val_loss": round(val_loss, 4),
+                "val_bpb": round(val_bpb, 4),
+                "balance_loss": round(bal_loss.item(), 6),
+            })
+
+    final_val = estimate_loss(model, val_data, config, device)
+    final_bpb = final_val / math.log(2)
+    elapsed = time.time() - t0
+    print(f"\n=== FINAL | {config.train_steps} steps in {elapsed:.1f}s | val_loss {final_val:.4f} | val_bpb {final_bpb:.4f} ===")
+
+    training_log["final"] = {
+        "total_steps": config.train_steps,
+        "elapsed_s": round(elapsed, 2),
+        "val_loss": round(final_val, 4),
+        "val_bpb": round(final_bpb, 4),
+    }
+
+    with open("training_log.json", "w") as f:
+        json.dump(training_log, f, indent=2)
+    print("Saved training_log.json")
+
+    print("\n--- Sample ---")
+    print(generate(model, itos, stoi, "def ", device=device))
 
     save_checkpoint(model, config, stoi, itos)
+    print("Training complete. Model saved to checkpoint/")
 
 
 if __name__ == "__main__":
