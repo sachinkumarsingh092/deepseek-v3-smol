@@ -6,3 +6,7 @@ The purpose was twofold:
 
 Used a H100 and opencode to run the entire loop.
 Basic plotting can be done via `plot.py`.
+
+### Links
+- Model hosted on huggingface: https://huggingface.co/sachinkumarsingh/deepseek-v3-tiny
+- Autoresearch: https://github.com/karpathy/autoresearch
