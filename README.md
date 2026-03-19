@@ -9,4 +9,9 @@ Basic plotting can be done via `plot.py`.
 
 ### Links
 - Model hosted on huggingface: https://huggingface.co/sachinkumarsingh/deepseek-v3-tiny
+- Tiny-codes dataset: https://huggingface.co/datasets/nampdn-ai/tiny-codes
 - Autoresearch: https://github.com/karpathy/autoresearch
+
+### Training results
+
+![training](./assets/training.png)
